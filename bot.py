@@ -65,7 +65,8 @@ async def start(message: Message):
         keyboard=[[
             KeyboardButton(
                 text="🚗 Записаться в автосервис",
-                web_app=WebAppInfo(url="https://tatr0.github.io/TATRO.github.io/")
+                web_app=WebAppInfo(url="https://tatr0.github.io/bot_telegram/")
+                
             )
         ]],
         resize_keyboard=True
@@ -173,7 +174,7 @@ async def fallback(message: Message):
             keyboard=[[
                 KeyboardButton(
                     text="🚗 Записаться в автосервис",
-                    web_app=WebAppInfo(url="https://tatr0.github.io/TATRO.github.io/")
+                    web_app=WebAppInfo(url="https://tatr0.github.io/bot_telegram/")
                 )
             ]],
             resize_keyboard=True
