@@ -88,7 +88,7 @@ async def webapp_handler(message: Message):
 
         # сохраняем заявку
         REQUESTS[request_id] = {
-            "user_id": user_id,
+            "user_id": message.from_user.id,  # ← ВОТ КЛЮЧ
             "name": name,
             "phone": phone
         }
