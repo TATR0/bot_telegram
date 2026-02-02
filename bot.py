@@ -1,14 +1,15 @@
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
-    WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton,
-    CallbackQuery
+    WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+    
 )
 import asyncio
 import os
 import json
 from datetime import datetime
 from dotenv import load_dotenv
+import sqlite3
 
 load_dotenv()
 
@@ -17,6 +18,54 @@ MASTER_CHAT_ID = int(os.getenv("MASTER_CHAT_ID"))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# ==== БАЗА ДАННЫХ ====
+DB_PATH = "bot.db"
+
+def get_db():
+    return sqlite3.connect(DB_PATH)
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS services (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        owner_id INTEGER,
+        created_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS admins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_id INTEGER,
+        user_id INTEGER
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_id INTEGER,
+        client_user_id INTEGER,
+        client_name TEXT,
+        phone TEXT,
+        brand TEXT,
+        model TEXT,
+        plate TEXT,
+        service_type TEXT,
+        urgency TEXT,
+        comment TEXT,
+        status TEXT,
+        created_at TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
 
 # ===== СЛОВАРИ =====
 SERVICE_NAMES = {
@@ -44,7 +93,6 @@ STATUS_LABELS = {
     "rejected": "❌ Отказ"
 }
 
-REQUESTS = {}
 
 # ===== КНОПКИ АДМИНКИ =====
 def admin_keyboard(request_id: str):
@@ -78,51 +126,83 @@ async def start(message: Message):
 async def webapp_handler(message: Message):
     try:
         data = json.loads(message.web_app_data.data)
-        request_id = str(int(datetime.now().timestamp()))
 
-        # безопасно достаём данные
-        name = data.get("client_name") or "Не указано"
-        phone = data.get("phone") or "—"
-        user = data.get("user") or {}
-        user_id = user.get("id")
+        # === ВСЕ ПЕРЕМЕННЫЕ СРАЗУ ===
+        name = (data.get("client_name") or "").strip() or "Не указано"
+        phone = (data.get("phone") or "").strip() or "—"
 
-        # сохраняем заявку
-        REQUESTS[request_id] = {
-            "user_id": message.from_user.id,  # ← ВОТ КЛЮЧ
-            "name": name,
-            "phone": phone
-        }
-
+        brand = data.get("brand", "—")
+        model = data.get("model", "—")
+        plate = data.get("plate", "—")
         service_key = data.get("service")
         urgency_key = data.get("urgency")
+        comment = data.get("comment", "")
 
         service_name = SERVICE_NAMES.get(service_key, service_key or "—")
         urgency_name = URGENCY_NAMES.get(urgency_key, urgency_key or "—")
 
+        # === СОХРАНЕНИЕ В БД ===
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO requests (
+                service_id,
+                client_user_id,
+                client_name,
+                phone,
+                brand,
+                model,
+                plate,
+                service_type,
+                urgency,
+                comment,
+                status,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            1,
+            message.from_user.id,
+            name,
+            phone,
+            brand,
+            model,
+            plate,
+            service_key,
+            urgency_key,
+            comment,
+            "new",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ))
+
+        request_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        # === СООБЩЕНИЕ АДМИНУ ===
         admin_message = (
             "<b>═══ 🚗 НОВАЯ ЗАЯВКА ═══</b>\n\n"
             "<b>👤 КЛИЕНТ</b>\n"
             f"Имя: <b>{name}</b>\n"
-            f"Телефон: <code>{phone}</code>\n\n"
+            f"Телефон: <code>+{phone}</code>\n\n"
             "<b>🚙 АВТО</b>\n"
-            f"Марка: {data.get('brand', '—')}\n"
-            f"Модель: {data.get('model', '—')}\n"
-            f"Гос номер: <code>{data.get('plate', '—')}</code>\n\n"
+            f"Марка: {brand}\n"
+            f"Модель: {model}\n"
+            f"Гос номер: <code>{plate}</code>\n\n"
             "<b>🔧 УСЛУГА</b>\n"
             f"Тип: {service_name}\n"
-            f"Срочность: {urgency_name}\n"
+            f"Срочность: {urgency_name}\n\n"
+            f"⏰ {datetime.now().strftime('%d.%m.%Y %H:%M')}"
         )
 
-        if data.get("comment"):
-            admin_message += f"\n<b>💬 Комментарий</b>\n{data.get('comment')}\n"
-
-        admin_message += f"\n⏰ {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        if comment:
+            admin_message += f"\n\n<b>💬 Комментарий</b>\n{comment}"
 
         await bot.send_message(
             MASTER_CHAT_ID,
             admin_message,
             parse_mode="HTML",
-            reply_markup=admin_keyboard(request_id)
+            reply_markup=admin_keyboard(str(request_id))
         )
 
         await message.answer(
@@ -131,38 +211,10 @@ async def webapp_handler(message: Message):
         )
 
     except Exception as e:
-        print("Ошибка:", e)
+        print("WEBAPP ERROR:", e)
         await message.answer("❌ Ошибка при отправке заявки")
 
 
-# ===== ОБРАБОТКА АДМИН-КНОПОК =====
-@dp.callback_query(F.data.startswith("status:"))
-async def admin_status_handler(callback: CallbackQuery):
-    if callback.from_user.id != MASTER_CHAT_ID:
-        await callback.answer("⛔ Нет доступа", show_alert=True)
-        return
-
-    _, status, request_id = callback.data.split(":")
-
-    # обновляем сообщение админу
-    new_text = callback.message.html_text + f"\n\n<b>📌 Статус:</b> {STATUS_LABELS[status]}"
-    await callback.message.edit_text(new_text, parse_mode="HTML")
-
-    # уведомление клиенту
-    request = REQUESTS.get(request_id)
-    if request and request.get("user_id"):
-        try:
-            await bot.send_message(
-                request["user_id"],
-                f"📢 <b>Статус вашей заявки обновлён</b>\n\n"
-                f"<b>Статус:</b> {STATUS_LABELS[status]}\n\n"
-                f"📞 Телефон сервиса: уточняйте при звонке",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            print("Ошибка отправки клиенту:", e)
-
-    await callback.answer("Статус обновлён")
 
 
 # ===== FALLBACK =====
@@ -180,9 +232,53 @@ async def fallback(message: Message):
             resize_keyboard=True
         )
     )
+#==== ПРОВЕРКА БАЗЫ ======
+@dp.message(F.text == "/debug_db")
+async def debug_db(message: Message):
+    if message.from_user.id != MASTER_CHAT_ID:
+        return
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, client_name, phone, brand, model, service_type, urgency, status, created_at
+        FROM requests
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        await message.answer("База пустая")
+        return
+
+    (
+        req_id, name, phone, brand, model,
+        service, urgency, status, created_at
+    ) = row
+
+    text = (
+        "<b>🧪 Последняя заявка</b>\n\n"
+        f"ID: {req_id}\n"
+        f"Имя: {name}\n"
+        f"Телефон: {phone}\n"
+        f"Марка: {brand}\n"
+        f"Модель: {model}\n"
+        f"Услуга: {SERVICE_NAMES.get(service, service)}\n"
+        f"Срочность: {URGENCY_NAMES.get(urgency, urgency)}\n"
+        f"Статус: {status}\n"
+        f"Создано: {created_at}"
+    )
+
+    await message.answer(text, parse_mode="HTML")
 
 # ===== MAIN =====
 async def main():
+    init_db()
+    print("✅ База данных инициализирована")
     print("✅ Бот с админкой запущен")
     await dp.start_polling(bot)
 
