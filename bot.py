@@ -93,7 +93,6 @@ STATUS_LABELS = {
     "rejected": "❌ Отказ"
 }
 
-
 # ===== КНОПКИ АДМИНКИ =====
 def admin_keyboard(request_id: str):
     return InlineKeyboardMarkup(inline_keyboard=[
